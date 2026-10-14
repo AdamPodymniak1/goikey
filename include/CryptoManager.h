@@ -24,6 +24,8 @@ String encryptStoragePayload(const String &plainText, const byte *key256);
 String decryptStoragePayload(const String &payload, const byte *key256);
 
 bool generateKeypairP256(uint8_t *privateKeyOut, uint8_t *publicKeyOut65);
+// New FIDO credential key: FPGA-wrapped blob (128 hex chars) when the asymmetric accelerator is attached, else a software key (64 hex chars)
+bool generateCredentialKeyP256(String &privateKeyHexOut, uint8_t *publicKeyOut65);
 bool signECDSA_P256(const uint8_t *privateKey32, const uint8_t *digest32, size_t digestLen, uint8_t *sigDerOut, size_t *sigDerLenOut);
 
 // Hardware-backed alternatives - see the definitions in CryptoManager.cpp
@@ -47,6 +49,7 @@ static int mbedtls_fido2_rng(void *p_rng, unsigned char *output, size_t output_l
 bool generateEd25519KeyPair(String &privateKeyHexOut, uint8_t *pubKeyXOut);
 bool generateRsa2048KeyPair(String& privateKeyHexOut, uint8_t* nOut, size_t* nLen, uint8_t* eOut, size_t* eLen);
 bool generateMlDsaKeyPair(int algId, uint8_t* privKeyOut, uint8_t* pubKeyOut);
+bool generateMlDsaKeyPairEx(int algId, uint8_t* privKeyOut, size_t privCap, size_t* privLen, uint8_t* pubKeyOut);
 bool mldsa_sign(int algId, uint8_t* sigOut, size_t* sigLen, const uint8_t* hash, size_t hashLen, const uint8_t* privKey);
 bool generateAlgSignature(int algId, const String &privateKeyHex, const uint8_t *hash, size_t hashLen, uint8_t **sigOut, size_t *sigLen);
 

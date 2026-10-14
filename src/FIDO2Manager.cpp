@@ -399,10 +399,11 @@ void FIDO2HIDDevice::processU2fCommand(uint32_t channel, uint8_t* data, uint16_t
 
         showDisplayMessage(1, "WAITING", "", 0);
 
-        uint8_t privKey[32];
+        // FPGA-wrapped blob when the asymmetric accelerator is attached, otherwise a software key
+        String privHex;
         uint8_t pubKey[65];
-        if (!generateKeypairP256(privKey, pubKey)) {
-            fidoLogf("REG", "REJECT 0x6F00: generateKeypairP256() failed");
+        if (!generateCredentialKeyP256(privHex, pubKey)) {
+            fidoLogf("REG", "REJECT 0x6F00: generateCredentialKeyP256() failed");
             uint8_t err[] = {0x6F, 0x00};
             sendCtapResponse(channel, CTAPHID_MSG, err, 2);
             return;
@@ -411,7 +412,7 @@ void FIDO2HIDDevice::processU2fCommand(uint32_t channel, uint8_t* data, uint16_t
 
         if (!isBatchAttestationAvailable()) {
             fidoLogf("REG", "REJECT 0x6F00: no batch attestation identity provisioned");
-            memset(privKey, 0, sizeof(privKey));
+            secureWipe(privHex);
             uint8_t err[] = {0x6F, 0x00};
             sendCtapResponse(channel, CTAPHID_MSG, err, 2);
             return;
@@ -421,14 +422,12 @@ void FIDO2HIDDevice::processU2fCommand(uint32_t channel, uint8_t* data, uint16_t
         esp_fill_random(kh, 16);
         String khHex = toHex(kh, 16);
         String appIdHex = toHex(payload + 32, 32);
-        String privHex = toHex(privKey, 32);
         fidoLogf("REG", "keyHandle=%s appIdHash=%s", khHex.c_str(), appIdHex.c_str());
 
         bool saved = savePasskeyRecord(khHex, appIdHex, "", "", privHex, -7);
         fidoLogf("REG", "savePasskeyRecord() -> %s", saved ? "OK" : "FAIL");
         if (!saved) {
             fidoLogf("REG", "REJECT 0x6F00: savePasskeyRecord() failed, refusing to attest an unpersisted credential");
-            memset(privKey, 0, sizeof(privKey));
             secureWipe(privHex);
             uint8_t err[] = {0x6F, 0x00};
             sendCtapResponse(channel, CTAPHID_MSG, err, 2);
@@ -454,7 +453,6 @@ void FIDO2HIDDevice::processU2fCommand(uint32_t channel, uint8_t* data, uint16_t
         bool signOk = generateAlgSignature(-7, signingKeyHex, sigData, 146, &sig, &sigLen);
         fidoLogf("REG", "generateAlgSignature() -> %s sigLen=%u", signOk ? "OK" : "FAIL", (unsigned)sigLen);
 
-        memset(privKey, 0, sizeof(privKey));
         secureWipe(privHex);
 
         if (!signOk) {
@@ -1082,14 +1080,10 @@ void FIDO2HIDDevice::processCborCommand(uint32_t channel, uint8_t* data, uint16_
 
         if (selectedAlgId == -7) {
             pubKeyData = (uint8_t*)malloc(65);
-            uint8_t* private_key_d = (uint8_t*)malloc(32);
-            if (pubKeyData && private_key_d) {
-                keygenSuccess = generateKeypairP256(private_key_d, pubKeyData);
-                if (keygenSuccess) {
-                    privateKeyHex = toHex(private_key_d, 32);
-                }
+            if (pubKeyData) {
+                // FPGA-wrapped blob when the asymmetric accelerator is attached, otherwise a software key
+                keygenSuccess = generateCredentialKeyP256(privateKeyHex, pubKeyData);
             }
-            if (private_key_d) free(private_key_d);
             pubKeyLen = 65;
         } else if (selectedAlgId == -8) {
             pubKeyData = (uint8_t*)malloc(32);
@@ -1140,17 +1134,19 @@ void FIDO2HIDDevice::processCborCommand(uint32_t channel, uint8_t* data, uint16_
             else if (selectedAlgId == -49) privKeyLen = 4032;
             else if (selectedAlgId == -50) privKeyLen = 4896;
 
+            // the FPGA-wrapped key is 32 bytes longer than the raw secret key
+            size_t privCap = privKeyLen + 32;
             pubKeyData = (uint8_t*)malloc(pubKeyLen);
-            uint8_t* privKeyData = (uint8_t*)malloc(privKeyLen);
+            uint8_t* privKeyData = (uint8_t*)malloc(privCap);
 
             if (pubKeyData && privKeyData) {
                 struct AsyncKeygen {
-                    int alg; uint8_t* priv; uint8_t* pub; volatile bool done; bool res;
-                } ctx = {selectedAlgId, privKeyData, pubKeyData, false, false};
+                    int alg; uint8_t* priv; size_t cap; size_t* plen; uint8_t* pub; volatile bool done; bool res;
+                } ctx = {selectedAlgId, privKeyData, privCap, &privKeyLen, pubKeyData, false, false};
 
                 BaseType_t taskRc = xTaskCreatePinnedToCore([](void* p){
                     AsyncKeygen* c = (AsyncKeygen*)p;
-                    c->res = generateMlDsaKeyPair(c->alg, c->priv, c->pub);
+                    c->res = generateMlDsaKeyPairEx(c->alg, c->priv, c->cap, c->plen, c->pub);
                     c->done = true;
                     vTaskDelete(NULL);
                 }, "PQC_Keygen", 131072, &ctx, 1, NULL, 1);
@@ -1172,7 +1168,7 @@ void FIDO2HIDDevice::processCborCommand(uint32_t channel, uint8_t* data, uint16_
                 }
             }
             if (privKeyData) {
-                memset(privKeyData, 0, privKeyLen);
+                memset(privKeyData, 0, privCap);
                 free(privKeyData);
             }
         }
@@ -3612,4 +3608,4 @@ void FIDO2HIDDevice::poll() {
     free(data);
 }
 
-FIDO2HIDDevice FidoHID;
+FIDO2HIDDevice FidoHID;

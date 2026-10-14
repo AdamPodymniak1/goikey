@@ -1,5 +1,6 @@
 #include "BackupManager.h"
 #include "CryptoManager.h"
+#include "CryptoAccel.h"
 #include "CommsManager.h"
 #include "Globals.h"
 #include <ArduinoJson.h>
@@ -21,21 +22,9 @@ bool importVaultPlaintext(JsonDocument &in, bool overwrite, uint32_t &importedCo
 #define MAX_BACKUP_HEX_LEN (512UL * 1024UL)
 
 static bool deriveBackupKey(const String &passphrase, const uint8_t *salt, uint32_t iterations, uint8_t keyOut[32]) {
-    mbedtls_md_context_t ctx;
-    mbedtls_md_init(&ctx);
-    if (mbedtls_md_setup(&ctx, mbedtls_md_info_from_type(MBEDTLS_MD_SHA256), 1) != 0) {
-        mbedtls_md_free(&ctx);
-        return false;
-    }
-    int rc = mbedtls_pkcs5_pbkdf2_hmac(
-        &ctx,
-        (const unsigned char *)passphrase.c_str(), passphrase.length(),
-        salt, BACKUP_SALT_LEN,
-        iterations,
-        32, keyOut
-    );
-    mbedtls_md_free(&ctx);
-    return rc == 0;
+    // 200 000 iterations: ~1 s on the FPGA accelerator, several seconds on the ESP32 (automatic fallback).
+    return accel_pbkdf2_sha256((const unsigned char *)passphrase.c_str(), passphrase.length(),
+                               salt, BACKUP_SALT_LEN, iterations, keyOut, 32);
 }
 
 static void putU32(uint8_t *dst, uint32_t v) {
@@ -71,18 +60,7 @@ static bool backupEncryptBlob(const String &plaintext, const String &passphrase,
     }
     uint8_t tag[BACKUP_TAG_LEN];
 
-    mbedtls_gcm_context gcm;
-    mbedtls_gcm_init(&gcm);
-    int rc = mbedtls_gcm_setkey(&gcm, MBEDTLS_CIPHER_ID_AES, key, 256);
-    if (rc == 0) {
-        rc = mbedtls_gcm_crypt_and_tag(
-            &gcm, MBEDTLS_GCM_ENCRYPT, ptLen,
-            nonce, sizeof(nonce), NULL, 0,
-            (const uint8_t *)plaintext.c_str(), cipher,
-            sizeof(tag), tag
-        );
-    }
-    mbedtls_gcm_free(&gcm);
+    int rc = accel_aes256_gcm_encrypt(key, nonce, NULL, 0, (const uint8_t *)plaintext.c_str(), ptLen, cipher, tag) ? 0 : -1;
     memset(key, 0, sizeof(key));
 
     if (rc != 0) {
@@ -159,18 +137,7 @@ static bool backupDecryptBlob(const String &hexIn, const String &passphrase, Str
     uint8_t *plain = (uint8_t *)malloc(ctLen > 0 ? ctLen : 1);
     if (!plain) { free(blob); memset(key, 0, sizeof(key)); errorOut = "OOM"; return false; }
 
-    mbedtls_gcm_context gcm;
-    mbedtls_gcm_init(&gcm);
-    int rc = mbedtls_gcm_setkey(&gcm, MBEDTLS_CIPHER_ID_AES, key, 256);
-    if (rc == 0) {
-        rc = mbedtls_gcm_auth_decrypt(
-            &gcm, ctLen,
-            nonce, sizeof(nonce), NULL, 0,
-            tag, sizeof(tag),
-            blob + o, plain
-        );
-    }
-    mbedtls_gcm_free(&gcm);
+    int rc = accel_aes256_gcm_decrypt(key, nonce, NULL, 0, blob + o, ctLen, tag, plain) ? 0 : -1;
     memset(key, 0, sizeof(key));
     memset(blob, 0, totalLen);
     free(blob);

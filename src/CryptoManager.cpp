@@ -13,6 +13,8 @@
 #include "mbedtls/version.h"
 #include "StorageManager.h"
 #include "AteccManager.h"
+#include "CryptoAccel.h"
+#include "FpgaAccel.h"
 #include <Ed25519.h>
 #include <nvs_flash.h>
 #include <nvs.h>
@@ -38,6 +40,10 @@ SecureTerminal Terminal;
 // ESP32's own TRNG, never make output weaker than what we had before.
 static void secureFillRandom(uint8_t *out, size_t len) {
   esp_fill_random(out, len);
+
+  // The FPGA TRNG (when attached) is XOR-mixed in exactly like the ATECC below: an absent or failing
+  // accelerator can never make the output weaker than the ESP32's own TRNG.
+  accel_mix_random(out, len);
 
   if (!atecc_available()) return;
 
@@ -85,6 +91,7 @@ String toHex(const byte *data, size_t len) {
 void initCrypto() {
   Serial.println("[SYS] CRYPTO_INIT");
   atecc_init(); // optional hardware entropy/keygen source; absence is non-fatal
+  accel_init(); // optional FPGA accelerator (SPI); without it everything runs on the ESP32
   init_aes_nonce_subsystem();
   secureFillRandom(aesKey, sizeof(aesKey));
   encryptionActive = false;
@@ -102,16 +109,7 @@ String encryptMsg(const String &plainText) {
 
   if (!cipher) return "";
 
-  mbedtls_gcm_context gcm;
-  mbedtls_gcm_init(&gcm);
-  mbedtls_gcm_setkey(&gcm, MBEDTLS_CIPHER_ID_AES, aesKey, 256);
-
-  mbedtls_gcm_crypt_and_tag(
-      &gcm, MBEDTLS_GCM_ENCRYPT, len,
-      iv, sizeof(iv), NULL, 0,
-      (const byte *)plainText.c_str(), cipher, sizeof(tag), tag);
-
-  mbedtls_gcm_free(&gcm);
+  if (!accel_aes256_gcm_encrypt(aesKey, iv, NULL, 0, (const byte *)plainText.c_str(), len, cipher, tag)) { free(cipher); return ""; }
 
   String result = "ENC:" + toHex(iv, 12) + ":" + toHex(cipher, len) + toHex(tag, 16);
   free(cipher);
@@ -148,18 +146,10 @@ String decryptMsg(const String &payload) {
     return "";
   }
 
-  mbedtls_gcm_context gcm;
-  mbedtls_gcm_init(&gcm);
-  mbedtls_gcm_setkey(&gcm, MBEDTLS_CIPHER_ID_AES, aesKey, 256);
-
-  int ret = mbedtls_gcm_auth_decrypt(
-      &gcm, cipherLen, iv, sizeof(iv),
-      NULL, 0, tag, 16, full, plain);
-
-  mbedtls_gcm_free(&gcm);
+  bool gcmOk = accel_aes256_gcm_decrypt(aesKey, iv, NULL, 0, full, cipherLen, tag, plain);
   free(full);
 
-  if (ret != 0) {
+  if (!gcmOk) {
     free(plain);
     return "";
   }
@@ -274,34 +264,18 @@ bool fidoEcdhSharedSecret(const uint8_t devicePriv32[32], const uint8_t peerXY64
 
 bool aesCbcZeroIvEncrypt(const uint8_t key32[32], const uint8_t *in, size_t len, uint8_t *out) {
   if (len % 16 != 0) return false;
-  mbedtls_aes_context aes;
-  mbedtls_aes_init(&aes);
-  if (mbedtls_aes_setkey_enc(&aes, key32, 256) != 0) { mbedtls_aes_free(&aes); return false; }
   uint8_t iv[16] = {0};
-  int ret = mbedtls_aes_crypt_cbc(&aes, MBEDTLS_AES_ENCRYPT, len, iv, in, out);
-  mbedtls_aes_free(&aes);
-  return ret == 0;
+  return accel_aes256_cbc(true, key32, iv, in, len, out);
 }
 
 bool aesCbcZeroIvDecrypt(const uint8_t key32[32], const uint8_t *in, size_t len, uint8_t *out) {
   if (len % 16 != 0) return false;
-  mbedtls_aes_context aes;
-  mbedtls_aes_init(&aes);
-  if (mbedtls_aes_setkey_dec(&aes, key32, 256) != 0) { mbedtls_aes_free(&aes); return false; }
   uint8_t iv[16] = {0};
-  int ret = mbedtls_aes_crypt_cbc(&aes, MBEDTLS_AES_DECRYPT, len, iv, in, out);
-  mbedtls_aes_free(&aes);
-  return ret == 0;
+  return accel_aes256_cbc(false, key32, iv, in, len, out);
 }
 
 void hmacSha256Raw(const uint8_t key32[32], const uint8_t *data, size_t len, uint8_t out32[32]) {
-  mbedtls_md_context_t ctx;
-  mbedtls_md_init(&ctx);
-  mbedtls_md_setup(&ctx, mbedtls_md_info_from_type(MBEDTLS_MD_SHA256), 1);
-  mbedtls_md_hmac_starts(&ctx, key32, 32);
-  mbedtls_md_hmac_update(&ctx, data, len);
-  mbedtls_md_hmac_finish(&ctx, out32);
-  mbedtls_md_free(&ctx);
+  accel_hmac_sha256(key32, 32, data, len, out32);
 }
 
 size_t SecureTerminal::write(uint8_t c) {
@@ -377,17 +351,7 @@ String encryptStoragePayload(const String &plainText, const byte *key256) {
 
   if (!cipher) return "";
 
-  mbedtls_gcm_context gcm;
-  mbedtls_gcm_init(&gcm);
-
-  mbedtls_gcm_setkey(&gcm, MBEDTLS_CIPHER_ID_AES, key256, 256);
-
-  mbedtls_gcm_crypt_and_tag(
-      &gcm, MBEDTLS_GCM_ENCRYPT, len,
-      iv, sizeof(iv), NULL, 0,
-      (const byte *)plainText.c_str(), cipher, sizeof(tag), tag);
-
-  mbedtls_gcm_free(&gcm);
+  if (!accel_aes256_gcm_encrypt(key256, iv, NULL, 0, (const byte *)plainText.c_str(), len, cipher, tag)) { free(cipher); return ""; }
 
   String result = toHex(iv, 12) + ":" + toHex(cipher, len) + ":" + toHex(tag, 16);
   free(cipher);
@@ -424,18 +388,10 @@ String decryptStoragePayload(const String &payload, const byte *key256) {
 
   fromHex(cipherHex, cipher, cipherLen);
 
-  mbedtls_gcm_context gcm;
-  mbedtls_gcm_init(&gcm);
-  mbedtls_gcm_setkey(&gcm, MBEDTLS_CIPHER_ID_AES, key256, 256);
-
-  int ret = mbedtls_gcm_auth_decrypt(
-      &gcm, cipherLen, iv, sizeof(iv),
-      NULL, 0, tag, 16, cipher, plain);
-
-  mbedtls_gcm_free(&gcm);
+  bool gcmOk = accel_aes256_gcm_decrypt(key256, iv, NULL, 0, cipher, cipherLen, tag, plain);
   free(cipher);
 
-  if (ret != 0) {
+  if (!gcmOk) {
     free(plain);
     return "";
   }
@@ -449,12 +405,7 @@ String decryptStoragePayload(const String &payload, const byte *key256) {
 String hashSHA256(const String &input) {
   uint8_t outputHash[32];
 
-  mbedtls_md(
-    mbedtls_md_info_from_type(MBEDTLS_MD_SHA256), 
-    (const uint8_t*)input.c_str(), 
-    input.length(), 
-    outputHash
-  );
+  accel_sha256((const uint8_t*)input.c_str(), input.length(), outputHash);
 
   return toHex(outputHash, 32);
 }
@@ -621,6 +572,24 @@ bool generateFido2Signature(const String& privateKeyHex, const uint8_t* clientDa
         return false;
     }
 
+    // A 128-hex-character key is an FPGA-wrapped blob (the private key never leaves the accelerator).
+    if (privateKeyHex.length() == 2 * FPGA_BLOB_LEN) {
+        uint8_t blob[FPGA_BLOB_LEN], raw[64];
+        fromHex(privateKeyHex, blob, sizeof(blob));
+        bool ok = false;
+        if (accel_has_asym_keys() && fpga_p256_sign(blob, clientDataHash, raw)) {
+            mbedtls_mpi r, s; mbedtls_mpi_init(&r); mbedtls_mpi_init(&s);
+            ok = mbedtls_mpi_read_binary(&r, raw, 32) == 0 && mbedtls_mpi_read_binary(&s, raw + 32, 32) == 0 &&
+                 derEncodeSignature(r, s, sigOutBuffer, sigOutLen);
+            mbedtls_mpi_free(&r); mbedtls_mpi_free(&s);
+        } else {
+            Serial.println("[ERR] FPGA-wrapped P-256 key but the accelerator is absent or failed");
+        }
+        memset(blob, 0, sizeof(blob));
+        return ok;
+    }
+    if (privateKeyHex.length() != 64) return false;
+
     size_t pkLen = privateKeyHex.length() / 2;
     uint8_t pkBin[32]; 
     fromHex(privateKeyHex, pkBin, pkLen);
@@ -638,7 +607,37 @@ static int mbedtls_fido2_rng(void *p_rng, unsigned char *output, size_t output_l
     return 0;
 }
 
+// New FIDO credential key (P-256): generated inside the FPGA and stored as a wrapped blob when the asymmetric
+// accelerator is attached, otherwise a normal software key (64 hex characters). Existing software keys keep working.
+bool generateCredentialKeyP256(String& privateKeyHexOut, uint8_t* publicKeyOut65) {
+    if (accel_has_asym_keys()) {
+        uint8_t blob[FPGA_BLOB_LEN], pub64[64];
+        if (fpga_p256_genkey(blob, pub64)) {
+            publicKeyOut65[0] = 0x04; memcpy(publicKeyOut65 + 1, pub64, 64);
+            privateKeyHexOut = toHex(blob, sizeof(blob));
+            memset(blob, 0, sizeof(blob));
+            return true;
+        }
+        Serial.println("[ACCEL] FPGA P-256 keygen failed - falling back to a software key");
+    }
+    uint8_t priv[32];
+    if (!generateKeypairP256(priv, publicKeyOut65)) return false;
+    privateKeyHexOut = toHex(priv, 32);
+    memset(priv, 0, sizeof(priv));
+    return true;
+}
+
 bool generateEd25519KeyPair(String& privateKeyHexOut, uint8_t* pubKeyXOut) {
+    if (accel_has_asym_keys()) {
+        uint8_t blob[FPGA_BLOB_LEN], pubf[32];
+        if (fpga_ed25519_genkey(blob, pubf)) {
+            privateKeyHexOut = toHex(blob, sizeof(blob));
+            memcpy(pubKeyXOut, pubf, 32);
+            memset(blob, 0, sizeof(blob));
+            return true;
+        }
+        Serial.println("[ACCEL] FPGA Ed25519 keygen failed - falling back to a software key");
+    }
     uint8_t priv[32];
     uint8_t pub[32];
 
@@ -653,6 +652,16 @@ bool generateEd25519KeyPair(String& privateKeyHexOut, uint8_t* pubKeyXOut) {
 }
 
 bool generateRsa2048KeyPair(String& privateKeyHexOut, uint8_t* nOut, size_t* nLen, uint8_t* eOut, size_t* eLen) {
+    if (accel_has_rsa_keys()) {                                          // FPGA: wrapped CRT key (672 bytes = 1344 hex characters)
+        uint8_t blob[FPGA_RSA_BLOB_LEN];
+        if (fpga_rsa_genkey(blob, nOut)) {
+            privateKeyHexOut = toHex(blob, sizeof(blob));
+            memset(blob, 0, sizeof(blob));
+            *nLen = 256; eOut[0] = 0x01; eOut[1] = 0x00; eOut[2] = 0x01; *eLen = 3;
+            return true;
+        }
+        Serial.println("[ACCEL] FPGA RSA keygen failed - falling back to software");
+    }
     mbedtls_pk_context ctx;
     mbedtls_pk_init(&ctx);
 
@@ -706,6 +715,15 @@ bool generateAlgSignature(int algId, const String& privateKeyHex, const uint8_t*
     else if (algId == -8) { 
         *sigOut = (uint8_t*)malloc(64);
         if (!*sigOut) return false;
+        if (privateKeyHex.length() == 2 * FPGA_BLOB_LEN) {                 // FPGA-wrapped Ed25519 key
+            uint8_t blob[FPGA_BLOB_LEN];
+            fromHex(privateKeyHex, blob, sizeof(blob));
+            bool ok = accel_has_asym_keys() && fpga_ed25519_sign(blob, msg, msgLen, *sigOut);
+            memset(blob, 0, sizeof(blob));
+            if (!ok) { free(*sigOut); *sigOut = nullptr; Serial.println("[ERR] FPGA-wrapped Ed25519 key but the accelerator is absent or failed"); return false; }
+            *sigLen = 64;
+            return true;
+        }
         uint8_t privBin[32]; uint8_t pubBin[32];
         fromHex(privateKeyHex, privBin, 32);
         Ed25519::derivePublicKey(pubBin, privBin);
@@ -718,6 +736,16 @@ bool generateAlgSignature(int algId, const String& privateKeyHex, const uint8_t*
         uint8_t hash[32];
         mbedtls_md(mbedtls_md_info_from_type(MBEDTLS_MD_SHA256), msg, msgLen, hash);
 
+        if (privateKeyHex.length() == 2 * FPGA_RSA_BLOB_LEN) {                // FPGA-wrapped RSA key
+            uint8_t blob[FPGA_RSA_BLOB_LEN];
+            fromHex(privateKeyHex, blob, sizeof(blob));
+            *sigOut = (uint8_t*)malloc(256);
+            bool ok = *sigOut && accel_has_rsa_keys() && fpga_rsa_sign_sha256(blob, hash, *sigOut);
+            memset(blob, 0, sizeof(blob));
+            if (!ok) { free(*sigOut); *sigOut = nullptr; Serial.println("[ERR] FPGA-wrapped RSA key but the accelerator is absent or failed"); return false; }
+            *sigLen = 256;
+            return true;
+        }
         size_t derLen = privateKeyHex.length() / 2;
         uint8_t* derBuf = (uint8_t*)malloc(derLen);
         fromHex(privateKeyHex, derBuf, derLen);
@@ -744,6 +772,7 @@ bool generateAlgSignature(int algId, const String& privateKeyHex, const uint8_t*
         if (!privBin) return false;
         fromHex(privateKeyHex, privBin, keyLen);
 
+        int ps = (algId == -48) ? 44 : (algId == -49) ? 65 : 87;
         if (algId == -48) *sigLen = 2420;
         else if (algId == -49) *sigLen = 3309;
         else if (algId == -50) *sigLen = 4627;
@@ -751,9 +780,16 @@ bool generateAlgSignature(int algId, const String& privateKeyHex, const uint8_t*
         *sigOut = (uint8_t*)malloc(*sigLen);
         if (!*sigOut) { free(privBin); return false; }
 
-        bool success = mldsa_sign(algId, *sigOut, sigLen, msg, msgLen, privBin);
+        bool success;
+        if (keyLen == fpga_mldsa_blob_len(ps)) {                          // FPGA-wrapped key (secret key + 32 bytes)
+            success = accel_present() && fpga_has_pq() && fpga_mldsa_sign(ps, privBin, msg, msgLen, *sigOut, sigLen);
+            if (!success) Serial.println("[ERR] FPGA-wrapped ML-DSA key but the accelerator is absent or failed");
+        } else {
+            success = mldsa_sign(algId, *sigOut, sigLen, msg, msgLen, privBin);
+        }
         memset(privBin, 0, keyLen);
         free(privBin);
+        if (!success) { free(*sigOut); *sigOut = nullptr; }
         return success;
     }
     return false;
@@ -842,6 +878,23 @@ extern "C" {
     #include "api_mldsa87.h"
 }
 
+// Like generateMlDsaKeyPair, but uses the FPGA (private key = wrapped blob, 32 bytes longer than the raw key) when the
+// pq bitstream is attached and falls back to a software key otherwise. *privLen reports the stored length.
+bool generateMlDsaKeyPairEx(int algId, uint8_t* privKeyOut, size_t privCap, size_t* privLen, uint8_t* pubKeyOut) {
+    int ps = (algId == -48) ? 44 : (algId == -49) ? 65 : (algId == -50) ? 87 : 0;
+    if (!ps) return false;
+    size_t blobLen = fpga_mldsa_blob_len(ps);
+    if (accel_present() && fpga_has_pq() && blobLen <= privCap) {
+        if (fpga_mldsa_genkey(ps, privKeyOut, pubKeyOut)) { *privLen = blobLen; return true; }
+        Serial.println("[ACCEL] FPGA ML-DSA keygen failed - falling back to a software key");
+    }
+    size_t rawLen = blobLen - 32;
+    if (rawLen > privCap) return false;
+    if (!generateMlDsaKeyPair(algId, privKeyOut, pubKeyOut)) return false;
+    *privLen = rawLen;
+    return true;
+}
+
 bool generateMlDsaKeyPair(int algId, uint8_t* privKeyOut, uint8_t* pubKeyOut) {
     if (algId == -48) return PQCLEAN_MLDSA44_CLEAN_crypto_sign_keypair(pubKeyOut, privKeyOut) == 0;
     if (algId == -49) return PQCLEAN_MLDSA65_CLEAN_crypto_sign_keypair(pubKeyOut, privKeyOut) == 0;
@@ -895,4 +948,4 @@ void generate_aes_gcm_nonce(byte *nonce_out) {
     nonce_out[9] = (rand_pad >> 16) & 0xFF;
     nonce_out[10] = (rand_pad >> 8) & 0xFF;
     nonce_out[11] = rand_pad & 0xFF;
-}
+}

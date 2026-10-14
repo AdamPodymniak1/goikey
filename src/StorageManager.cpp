@@ -1,4 +1,5 @@
 #include "StorageManager.h"
+#include "CryptoAccel.h"
 #include "CryptoManager.h"
 #include "CommsManager.h"
 #include "FingerprintManager.h"
@@ -33,24 +34,10 @@ static bool rpFieldMatchesRpId(const String &storedRpField, const String &plainR
 }
 
 void deriveStorageKey(const String &pin) {
-    mbedtls_md_context_t ctx;
-    mbedtls_md_init(&ctx);
-    mbedtls_md_setup(&ctx, mbedtls_md_info_from_type(MBEDTLS_MD_SHA256), 1);
-
     const unsigned char salt[] = "VAULT_STORAGE_SALT";
 
-    mbedtls_pkcs5_pbkdf2_hmac(
-        &ctx,
-        (const unsigned char *)pin.c_str(),
-        pin.length(),
-        salt,
-        sizeof(salt) - 1,
-        10000,
-        32,
-        storageKey
-    );
-
-    mbedtls_md_free(&ctx);
+    // FPGA when attached (10 000 iterations), otherwise mbedTLS on the ESP32 - same result either way
+    accel_pbkdf2_sha256((const unsigned char *)pin.c_str(), pin.length(), salt, sizeof(salt) - 1, 10000, storageKey, 32);
     isStorageKeyLoaded = true;
 }
 
@@ -1848,4 +1835,4 @@ bool verifyFidoPinHashInternal(const uint8_t pinHash16[16]) {
     uint8_t storedBytes[16];
     fromHex(storedHash.substring(0, 32), storedBytes, 16);
     return memcmp(storedBytes, pinHash16, 16) == 0;
-}
+}
