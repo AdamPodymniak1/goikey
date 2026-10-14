@@ -5,7 +5,7 @@
 .vscode/launch.json
 .vscode/ipch
 _testing
-
+ai_chat.md
 attestation_test/
 *.pem
 *.der
