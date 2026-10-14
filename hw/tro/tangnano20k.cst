@@ -1,0 +1,28 @@
+// Tang Nano 20k (GW2AR-18C QFN88) Constraints for Root of Trust
+// Gowin CST format - real board pinout from Sipeed examples
+//
+// Board: Sipeed Tang Nano 20k
+//   clk     = 27 MHz crystal  -> pin 4
+//   rst_n   = button S1       -> pin 88 (active low)
+//   LED0-2  = onboard LEDs    -> pins 15, 16, 17 (active low)
+//   uart_tx = onboard CH340   -> pin 69
+
+// System clock (27 MHz crystal)
+IO_LOC "clk" 4;
+IO_PORT "clk" IO_TYPE=LVCMOS33 PULL_MODE=UP;
+
+// Button S1 (active high on this board) - holds design in reset while pressed
+IO_LOC "btn_s1" 88;
+IO_PORT "btn_s1" IO_TYPE=LVCMOS33 PULL_MODE=DOWN;
+
+// Onboard LEDs (active low)
+IO_LOC "led0" 15;
+IO_PORT "led0" IO_TYPE=LVCMOS33 DRIVE=8;
+IO_LOC "led1" 16;
+IO_PORT "led1" IO_TYPE=LVCMOS33 DRIVE=8;
+IO_LOC "led2" 17;
+IO_PORT "led2" IO_TYPE=LVCMOS33 DRIVE=8;
+
+// UART TX to onboard USB-UART bridge (CH340)
+IO_LOC "uart_tx" 69;
+IO_PORT "uart_tx" IO_TYPE=LVCMOS33 DRIVE=8;

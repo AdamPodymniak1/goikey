@@ -1,0 +1,21 @@
+# udev rules for Tang Nano 20k / Gowin FT2232 JTAG programmer
+# Install to /etc/udev/rules.d/99-tangnano20k.rules
+#
+# On NixOS, add to configuration.nix instead:
+#   services.udev.extraRules = builtins.readFile ./99-tangnano20k.rules;
+#
+# Then reload:
+#   sudo udevadm control --reload-rules && sudo udevadm trigger
+
+# Sipeed Tang Nano 20k (FTDI FT2232D, "USB Debugger")
+SUBSYSTEM=="usb", ATTR{idVendor}=="0403", ATTR{idProduct}=="6010", MODE="0666", GROUP="dialout"
+SUBSYSTEM=="usb", ATTR{idVendor}=="0403", ATTR{idProduct}=="6014", MODE="0666", GROUP="dialout"
+
+# Tang Nano 20k with the open BL616 DirtyJTAG firmware (Sipeed bootloader at 0x0, app at 0x20000)
+SUBSYSTEM=="usb", ATTR{idVendor}=="1209", ATTR{idProduct}=="c0ca", MODE="0666", GROUP="dialout"
+
+# Generic FTDI JTAG cables (covers other boards too)
+SUBSYSTEM=="usb", ATTR{idVendor}=="0403", ATTR{idProduct}=="6010", MODE="0666"
+SUBSYSTEM=="usb", ATTR{idVendor}=="0403", ATTR{idProduct}=="6011", MODE="0666"
+SUBSYSTEM=="usb", ATTR{idVendor}=="0403", ATTR{idProduct}=="6014", MODE="0666"
+SUBSYSTEM=="usb", ATTR{idVendor}=="0403", ATTR{idProduct}=="6015", MODE="0666"

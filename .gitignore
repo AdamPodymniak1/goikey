@@ -11,3 +11,16 @@ attestation_test/
 *.der
 provisioning*.bin
 provisioning*.csv
+# FPGA build outputs; hw/tro/build/master.hex and uid.hex are per-device SECRETS
+hw/*/build/
+hw/accel/tb/vec*/
+__pycache__/
+# compiled ML-DSA reference helpers (build with hw/accel/ref/pq/build_ref.sh) and generated vector dumps
+hw/accel/ref/pq/golden
+hw/accel/ref/pq/golden44
+hw/accel/ref/pq/golden65
+hw/accel/ref/pq/golden87
+hw/accel/ref/pq/verify
+# Sipeed binaries: fetch with hw/bl616/fetch_sipeed.sh (hash-verified)
+hw/bl616/goikey/*.bin
+hw/bl616/recovery/*.bin

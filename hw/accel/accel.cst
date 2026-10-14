@@ -1,0 +1,26 @@
+// Tang Nano 20k (GW2AR-18C QFN88) - crypto accelerator
+IO_LOC "clk" 4;
+IO_PORT "clk" IO_TYPE=LVCMOS33 PULL_MODE=UP;
+IO_LOC "btn_s1" 88;
+IO_PORT "btn_s1" IO_TYPE=LVCMOS33 PULL_MODE=DOWN;
+IO_LOC "led0" 15;
+IO_PORT "led0" IO_TYPE=LVCMOS33 DRIVE=8;
+IO_LOC "led1" 16;
+IO_PORT "led1" IO_TYPE=LVCMOS33 DRIVE=8;
+IO_LOC "led2" 17;
+IO_PORT "led2" IO_TYPE=LVCMOS33 DRIVE=8;
+IO_LOC "uart_tx_pin" 69;
+IO_PORT "uart_tx_pin" IO_TYPE=LVCMOS33 DRIVE=8;
+IO_LOC "uart_rx_pin" 70;
+IO_PORT "uart_rx_pin" IO_TYPE=LVCMOS33 PULL_MODE=UP;
+
+// SPI slave link to the ESP32 (mode 0). ASSUMED header pins - check them against your board's pinout and the
+// ESP32 wiring (ESP32 side: SCK=GPIO14, MOSI=GPIO15, MISO=GPIO21, CS=GPIO18, plus a common GND; 3.3 V logic).
+IO_LOC "spi_sck" 25;
+IO_PORT "spi_sck" IO_TYPE=LVCMOS33 PULL_MODE=DOWN;
+IO_LOC "spi_mosi" 26;
+IO_PORT "spi_mosi" IO_TYPE=LVCMOS33 PULL_MODE=DOWN;
+IO_LOC "spi_cs_n" 27;
+IO_PORT "spi_cs_n" IO_TYPE=LVCMOS33 PULL_MODE=UP;
+IO_LOC "spi_miso" 28;
+IO_PORT "spi_miso" IO_TYPE=LVCMOS33 DRIVE=8;
