@@ -1,8 +1,8 @@
-# SwissSec
+# GoiKey
 
 > Swiss Knife for all your cybersecurity needs
 
-SwissSec is an advanced, hardware-based cybersecurity multitool built on the ESP32-S3. It serves as a secure password vault, a fully compliant FIDO2/WebAuthn authenticator, and a TOTP generator. Featuring biometric authentication, True Random Number Generation (TRNG), AES-GCM encryption, and cutting-edge Post-Quantum Cryptography (ML-DSA), SwissSec provides enterprise-grade security in a portable, self-contained hardware token.
+GoiKey is an advanced, hardware-based cybersecurity multitool built on the ESP32-S3. It serves as a secure password vault, a fully compliant FIDO2/WebAuthn authenticator, and a TOTP generator. Featuring biometric authentication, True Random Number Generation (TRNG), AES-GCM encryption, and cutting-edge Post-Quantum Cryptography (ML-DSA), GoiKey provides enterprise-grade security in a portable, self-contained hardware token.
 
 ---
 
@@ -168,7 +168,7 @@ This project is built for the ESP32-S3 microcontroller. It requires an SSD1306 S
 
 ## FIDO2 Attestation Certificate Provisioning
 
-SwissSec presents an X.509 batch attestation certificate during legacy U2F/CTAP1 registration, so relying parties can verify the credential came from genuine SwissSec hardware rather than an arbitrary software authenticator. The certificate chain and its matching EC P-256 private key are stored in the ESP32's NVS (`fido_attest` namespace) — **never compiled into the firmware source**, and never committed to this repository.
+GoiKey presents an X.509 batch attestation certificate during legacy U2F/CTAP1 registration, so relying parties can verify the credential came from genuine GoiKey hardware rather than an arbitrary software authenticator. The certificate chain and its matching EC P-256 private key are stored in the ESP32's NVS (`fido_attest` namespace) — **never compiled into the firmware source**, and never committed to this repository.
 
 ### Why there's no cert in this repo
 
